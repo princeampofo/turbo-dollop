@@ -28,7 +28,7 @@ int ssthresh = 64;
 int window_size = 1;
 int windowFloat = 0;
 int slow_start = 1;
-int dup_cnt = 0;
+int dupAcks = 0;
 
 // Global variables for checking the end of file
 int file_end = 0;
@@ -106,19 +106,19 @@ int main (int argc, char **argv)
     init_timer(RETRY, resend_packets);
 
 
-    tcp_packet* pkt_arr[WINDOW_SIZE]; // Stores the packets that have been sent
-    int seqno_arr[WINDOW_SIZE]; // Stores the seqno of packets that were sent
-    int timer_running = 0; // indicates whether a timer has already been started
-    int last_byte_sent = -1; // This indicates the last byte in seqno array that was sent
+    tcp_packet* packetsArray[WINDOW_SIZE]; // Stores the packets that have been sent
+    int seqnoArray[WINDOW_SIZE]; // Stores the seqno of packets that were sent
+    int timerStarted = 0; // indicates whether a timer has already been started
+    int lastSentSeqno = -1; // This indicates the last byte in seqno array that was sent
     // int break_loop = 0; //flag to break loop
 
-    dup_cnt = 0;    //this tracks number of duplicate acks
+    dupAcks = 0;    //this tracks number of duplicate acks
     int sent_packet_cnt = 0; // Tracks number of in flight packets, should not exceed congestion window
 
-    //initializing seqno_arr and pkt_arr
+    //initializing seqnoArray and packetsArray
     for (int i = 0; i < WINDOW_SIZE; i++){
-        seqno_arr[i] = -1;
-        pkt_arr[i] = NULL;
+        seqnoArray[i] = -1;
+        packetsArray[i] = NULL;
     }
 
     int index; // This is the index of the array where the next packet will be stored
@@ -127,7 +127,7 @@ int main (int argc, char **argv)
         while (sent_packet_cnt < window_size){
 
             for (index=0; index< WINDOW_SIZE; index++) {
-                if (seqno_arr[index] == -1)
+                if (seqnoArray[index] == -1)
                     break;
             }
             if(index == WINDOW_SIZE) break;
@@ -145,22 +145,22 @@ int main (int argc, char **argv)
             memcpy(packet_to_send->data, buffer, len);
             packet_to_send->hdr.seqno = next_seqno;
 
-            // Add the packet_to_send to the pkt_arr
-            pkt_arr[index] = packet_to_send;
-            seqno_arr[index] = next_seqno;
+            // Add the packet_to_send to the packetsArray
+            packetsArray[index] = packet_to_send;
+            seqnoArray[index] = next_seqno;
 
             // Check if timer has already started, if not, start it and move the current packet to sndpkt
-            if (!timer_running) {
+            if (!timerStarted) {
                 start_timer();
                 sndpkt = packet_to_send;
-                timer_running = 1;
+                timerStarted = 1;
                 send_base = next_seqno;
             }
 
             
             // Increment the seqno
             next_seqno += len; 
-            last_byte_sent = next_seqno;
+            lastSentSeqno = next_seqno;
 
             // VLOG information
             VLOG(DEBUG, "Sending packet %d to %s", 
@@ -197,15 +197,15 @@ int main (int argc, char **argv)
         if (recvpkt->hdr.ackno > send_base){
             // set the new send base to the ack received
             send_base = recvpkt->hdr.ackno;
-            dup_cnt = 0;
+            dupAcks = 0;
 
             for (int i = 0; i < WINDOW_SIZE; i++){
 
-                if (seqno_arr[i] < send_base && seqno_arr[i] != -1){
+                if (seqnoArray[i] < send_base && seqnoArray[i] != -1){
                     // Set the packet to NULL
-                    // VLOG(INFO, "Freeing packet %d", pkt_arr[i]->hdr.seqno);
-                    seqno_arr[i] = -1;
-                    free(pkt_arr[i]);
+                    // VLOG(INFO, "Freeing packet %d", packetsArray[i]->hdr.seqno);
+                    seqnoArray[i] = -1;
+                    free(packetsArray[i]);
                     sent_packet_cnt--;
 
                     //incrementing window size in congestion avoidance mode
@@ -235,11 +235,11 @@ int main (int argc, char **argv)
             }
 
             // if not all packets in our window are acked
-            if (last_byte_sent > send_base){
+            if (lastSentSeqno > send_base){
                 for (int i = 0; i < WINDOW_SIZE; i++){
-                    if (seqno_arr[i] == send_base){
-                        sndpkt = pkt_arr[i];
-                        send_base = seqno_arr[i];
+                    if (seqnoArray[i] == send_base){
+                        sndpkt = packetsArray[i];
+                        send_base = seqnoArray[i];
                         start_timer();
                         break;
                     }
@@ -257,14 +257,14 @@ int main (int argc, char **argv)
                     break;
                 }
 
-                timer_running = 0;
+                timerStarted = 0;
             }
         }
 
         
         else{   /*handling duplicate acks*/
-            dup_cnt++;
-            if (dup_cnt == 3){  //resend if 3 duplicate acks
+            dupAcks++;
+            if (dupAcks == 3){  //resend if 3 duplicate acks
                 ssthresh = window_size/2 > 2 ? window_size/2 : 2;  //setting ssthresh to half of window size and starting slow start over again
                 window_size = 1;   //resetting window_size to 1 to restart slow start
                 windowFloat = 0; 
@@ -277,7 +277,7 @@ int main (int argc, char **argv)
                 }
 
                 start_timer();
-                dup_cnt = 0;    //set dup_cnt to 0 after resending lost packet
+                dupAcks = 0;    //set dupAcks to 0 after resending lost packet
 
                 // Write to csv
                 gettimeofday(&timer.it_value, NULL);
@@ -292,8 +292,8 @@ int main (int argc, char **argv)
 
     int i;
     for (i=0; i<WINDOW_SIZE;i++) {
-        if (seqno_arr[i] != -1) {
-            free(pkt_arr[i]);
+        if (seqnoArray[i] != -1) {
+            free(packetsArray[i]);
         }
     }
 
@@ -325,7 +325,7 @@ void resend_packets(int sig)
         {
             error("sendto");
         }
-        dup_cnt = 0;
+        dupAcks = 0;
 
         // Write to csv
         gettimeofday(&timer.it_value, NULL);
