@@ -39,6 +39,8 @@ int file_end = 0;
 int sentLastAck = 0;
 
 // Global variables for the packet arrays
+tcp_packet* packetsArray[WINDOW_SIZE]; // Stores the packets that have been sent
+int seqnoArray[WINDOW_SIZE]; // Stores the seqno of packets that were sent
 
 // Global variables for the socket
 int sockfd, serverlen;
@@ -110,10 +112,6 @@ int main (int argc, char **argv)
     init_timer(RETRY, resend_packets);
 
 
-    tcp_packet* packetsArray[WINDOW_SIZE]; // Stores the packets that have been sent
-    int seqnoArray[WINDOW_SIZE]; // Stores the seqno of packets that were sent
-
-
     //initializing seqnoArray and packetsArray
     for (int i = 0; i < WINDOW_SIZE; i++){
         seqnoArray[i] = -1;
@@ -139,26 +137,24 @@ int main (int argc, char **argv)
             }
             
             // Make the packet
-            tcp_packet* packet_to_send = make_packet(len);
-            memcpy(packet_to_send->data, buffer, len);
-            packet_to_send->hdr.seqno = next_seqno;
+            tcp_packet* tempPacket = make_packet(len);
+            memcpy(tempPacket->data, buffer, len);
+            tempPacket->hdr.seqno = next_seqno;
 
-            // Add the packet_to_send to the packetsArray
-            packetsArray[index] = packet_to_send;
-            seqnoArray[index] = next_seqno;
+            // Add the tempPacket to the packetsArray
+            packetsArray[index] = tempPacket;
+            seqnoArray[index] = tempPacket->hdr.seqno;
+
+            next_seqno += len; 
+            lastSentSeqno = next_seqno;
 
             // Check if timer has already started, if not, start it and move the current packet to sndpkt
             if (!timerStarted) {
                 start_timer();
-                sndpkt = packet_to_send;
+                sndpkt = tempPacket;
                 timerStarted = 1;
-                send_base = next_seqno;
+                send_base = tempPacket->hdr.seqno;
             }
-
-            
-            // Increment the seqno
-            next_seqno += len; 
-            lastSentSeqno = next_seqno;
 
             // VLOG information
             VLOG(DEBUG, "Sending packet %d to %s", 
@@ -170,18 +166,19 @@ int main (int argc, char **argv)
             * will assign a random port number so that server can send its
             * response to the src port.
             */
-            if(sendto(sockfd, packet_to_send, TCP_HDR_SIZE + get_data_size(packet_to_send), 0, 
+            if(sendto(sockfd, tempPacket, TCP_HDR_SIZE + get_data_size(tempPacket), 0, 
                         ( const struct sockaddr *)&serveraddr, serverlen) < 0)
             {
-                error("sendto");
+                error("Sending packet failed in while loop");
             }
             
             if(file_end== 1)
                 sentLastAck = 1;
+
             packetsInFlight += 1;
         }
 
-      //Wait for ACK
+        //Wait for ACK
         if(recvfrom(sockfd, buffer, MSS_SIZE, 0,
                     (struct sockaddr *) &serveraddr, (socklen_t *)&serverlen) < 0)
         {
@@ -190,100 +187,71 @@ int main (int argc, char **argv)
 
         recvpkt = (tcp_packet *)buffer;
         assert(get_data_size(recvpkt) <= DATA_SIZE);
-        
-        //if we receive an in order acknowledgement -- for step 1, this will always be the case
-        if (recvpkt->hdr.ackno > send_base){
-            // set the new send base to the ack received
-            send_base = recvpkt->hdr.ackno;
-            dupAcks = 0;
 
-            for (int i = 0; i < WINDOW_SIZE; i++){
+        if(recvpkt->hdr.ackno <= send_base){   /*handling duplicate acks*/
+            if (++dupAcks == 3){  //resend if 3 duplicate acks
+                resend_packets(SIGALRM);
+            }
+            continue;
+        }
 
-                if (seqnoArray[i] < send_base && seqnoArray[i] != -1){
-                    // Set the packet to NULL
-                    // VLOG(INFO, "Freeing packet %d", packetsArray[i]->hdr.seqno);
-                    seqnoArray[i] = -1;
-                    free(packetsArray[i]);
-                    packetsInFlight--;
+        // set the new send base to the ack received
 
-                    //incrementing window size in congestion avoidance mode
-                    if (!slow_start){
-                        windowFloat++;
+        send_base = recvpkt->hdr.ackno;
+        dupAcks = 0;
 
-                        if (windowFloat == window_size){
-                            window_size = ++window_size < WINDOW_SIZE ? window_size : WINDOW_SIZE;
-                            windowFloat = 0;
-                            gettimeofday(&timer.it_value, NULL);
-                            fprintf(csvFile,"%ld, %d\n", timer.it_value.tv_sec, window_size);
-                        }
-                    }
+        for (int i = 0; i < WINDOW_SIZE; i++){
+            if (seqnoArray[i] < send_base && seqnoArray[i] != -1){
+                // Set the packet to NULL
+                // VLOG(INFO, "Freeing packet %d", packetsArray[i]->hdr.seqno);
+                seqnoArray[i] = -1;
+                free(packetsArray[i]);
+                packetsInFlight--;
 
-                    //incrementing window in slow_start
-                    else{
+                //incrementing window size in congestion avoidance mode
+                if (!slow_start){
+                    windowFloat++;
+
+                    if (windowFloat == window_size){
                         window_size = ++window_size < WINDOW_SIZE ? window_size : WINDOW_SIZE;
-                        if (window_size == ssthresh){
-                            slow_start = 0;
-                        }
-                        //write to csv
+                        windowFloat = 0;
                         gettimeofday(&timer.it_value, NULL);
                         fprintf(csvFile,"%ld, %d\n", timer.it_value.tv_sec, window_size);
                     }
-
                 }
-            }
-
-            // if not all packets in our window are acked
-            if (lastSentSeqno > send_base){
-                for (int i = 0; i < WINDOW_SIZE; i++){
-                    if (seqnoArray[i] == send_base){
-                        sndpkt = packetsArray[i];
-                        send_base = seqnoArray[i];
-                        start_timer();
-                        break;
+                //incrementing window in slow_start
+                else{
+                    window_size = ++window_size < WINDOW_SIZE ? window_size : WINDOW_SIZE;
+                    if (window_size == ssthresh){
+                        slow_start = 0;
                     }
-                }
-            }
-            // if not we set the timer running to 0 because we are going to refill the array
-            else {
-                stop_timer();
-                // VLOG(INFO, "All packets in window have been acked");
-                if (file_end == 1) {    //if end file, send empty packet to receiver to indicate end of file
-                    VLOG(INFO, "End Of File has been reached");
-                    sndpkt = make_packet(0);
-                    sendto(sockfd, sndpkt, TCP_HDR_SIZE,  0,
-                            (const struct sockaddr *)&serveraddr, serverlen);
-                    break;
+                    //write to csv
+                    gettimeofday(&timer.it_value, NULL);
+                    fprintf(csvFile,"%ld, %d\n", timer.it_value.tv_sec, window_size);
                 }
 
+            }
+        }
+        if(lastSentSeqno <= send_base){
+            if(file_end == 1){
+                timerStarted = 1;
+                sndpkt = make_packet(0);
+            }else{
+                stop_timer();
                 timerStarted = 0;
             }
+            continue;
         }
 
-        
-        else{   /*handling duplicate acks*/
-            dupAcks++;
-            if (dupAcks == 3){  //resend if 3 duplicate acks
-                ssthresh = window_size/2 > 2 ? window_size/2 : 2;  //setting ssthresh to half of window size and starting slow start over again
-                window_size = 1;   //resetting window_size to 1 to restart slow start
-                windowFloat = 0; 
-                slow_start = 1; //setting flag to start slow start again
-                
-                if(sendto(sockfd, sndpkt, TCP_HDR_SIZE + get_data_size(sndpkt), 0, 
-                    ( const struct sockaddr *)&serveraddr, serverlen) < 0)
-                {
-                    error("sendto");
-                }
-
+        for (int i = 0; i < WINDOW_SIZE; i++){
+            if (seqnoArray[i] == send_base){
+                sndpkt = packetsArray[i];
+                send_base = seqnoArray[i];
                 start_timer();
-                dupAcks = 0;    //set dupAcks to 0 after resending lost packet
-
-                // Write to csv
-                gettimeofday(&timer.it_value, NULL);
-                fprintf(csvFile,"%ld, %d\n", timer.it_value.tv_sec, window_size);
+                timerStarted = 1;
+                break;
             }
-            
         }
-        
 
     }
 
@@ -306,7 +274,8 @@ void resend_packets(int sig)
         //Resend all packets range between 
         //sendBase and nextSeqNum
 
-        if(sndpkt->hdr.data_size == 0 && next_seqno == 0 && file_end == 1)
+        VLOG(INFO, "Timeout happened for packet %d, %d, %d, %d", sndpkt->hdr.data_size, next_seqno, send_base, file_end);
+        if(sndpkt->hdr.data_size == 0 && next_seqno == send_base && file_end == 1)
         {
             VLOG(INFO, "Last packet is acked, exiting");
             // If the last packet is acked, then we don't need to resend
@@ -321,7 +290,7 @@ void resend_packets(int sig)
         if(sendto(sockfd, sndpkt, TCP_HDR_SIZE + get_data_size(sndpkt), 0, 
                     ( const struct sockaddr *)&serveraddr, serverlen) < 0)
         {
-            error("sendto");
+            error("Error in sending packet in timeout");
         }
         dupAcks = 0;
 
