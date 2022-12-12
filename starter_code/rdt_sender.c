@@ -35,7 +35,7 @@ int dupAcks = 0;  //this tracks number of duplicate acks
 
 
 // Global variables for checking the end of file
-int file_end = 0;
+int endOfFile = 0;
 int sentLastAck = 0;
 
 // Global variables for the packet arrays
@@ -131,7 +131,7 @@ int main (int argc, char **argv)
             len = fread(buffer, 1, DATA_SIZE, fp);
             if ( len <= 0)
             {
-                file_end = 1;
+                endOfFile = 1;
                 // If we have already sent the last ack, break and wait for timeout to terminate
                 // This is to ensure that the last ack was really received by the receiver
                 if(len < 0 || sentLastAck == 1) break;      
@@ -173,7 +173,7 @@ int main (int argc, char **argv)
                 error("Sending packet failed in while loop");
             }
             
-            if(file_end== 1)
+            if(endOfFile== 1)
                 sentLastAck = 1;
 
             packetsInFlight += 1;
@@ -230,7 +230,7 @@ int main (int argc, char **argv)
         
         // If the last packet was sent and the ack is for it, stop the timer
         if(lastSentSeqno <= send_base){
-            if(file_end == 1){
+            if(endOfFile == 1){
                 timerStarted = 1;
                 sndpkt = make_packet(0);
             }else{
@@ -243,8 +243,8 @@ int main (int argc, char **argv)
         // Find a new packet to be the base packet for the window
         for (int i = 0; i < WINDOW_SIZE; i++){
             if (seqnoArray[i] == send_base){
-                sndpkt = packetsArray[i];
                 send_base = seqnoArray[i];
+                sndpkt = packetsArray[i];
                 start_timer();
                 timerStarted = 1;
                 break;
@@ -267,8 +267,8 @@ void resend_packets(int sig)
 {
     if (sig == SIGALRM)
     {
-        VLOG(INFO, "Timeout happened for packet %d, %d, %d, %d", sndpkt->hdr.data_size, next_seqno, send_base, file_end);
-        if(sndpkt->hdr.data_size == 0 && next_seqno == send_base && file_end == 1)
+        VLOG(INFO, "Timeout happened for packet %d, %d, %d, %d", sndpkt->hdr.data_size, next_seqno, send_base, endOfFile);
+        if(sndpkt->hdr.data_size == 0 && next_seqno == send_base && endOfFile == 1)
         {
             VLOG(INFO, "Last packet is acked, exiting");
             // If the last packet is acked, then we don't need to resend
@@ -278,16 +278,17 @@ void resend_packets(int sig)
         // If the last packet is not acked, then we need to resend
         //Resend the base packet of the congestion window and start a chain that sends all packets in the window
 
-        ssthresh = window_size/2 > 2 ? window_size/2 : 2;
-        window_size = 1;
-        windowFloat = 0;
-        slow_start = 1;
-
         if(sendto(sockfd, sndpkt, TCP_HDR_SIZE + get_data_size(sndpkt), 0, 
                     ( const struct sockaddr *)&serveraddr, serverlen) < 0)
         {
             error("Error in sending packet in timeout");
         }
+        
+        slow_start = 1;
+        windowFloat = 0;
+        ssthresh = window_size/2 > 2 ? window_size/2 : 2;
+        window_size = 1;
+        
 
         dupAcks = 0;
         start_timer();
