@@ -22,13 +22,17 @@
 // Global variables for checking the sequences
 int next_seqno=0;
 int send_base=0;
+int timerStarted = 0; // indicates whether a timer has already been started
+int lastSentSeqno = -1; // This indicates the last byte in seqno array that was sent
+int packetsInFlight = 0; // Tracks number of in flight packets, should not exceed congestion window
 
 // Global variables for congestion control
 int ssthresh = 64;
 int window_size = 1;
 int windowFloat = 0;
 int slow_start = 1;
-int dupAcks = 0;
+int dupAcks = 0;  //this tracks number of duplicate acks
+
 
 // Global variables for checking the end of file
 int file_end = 0;
@@ -108,12 +112,7 @@ int main (int argc, char **argv)
 
     tcp_packet* packetsArray[WINDOW_SIZE]; // Stores the packets that have been sent
     int seqnoArray[WINDOW_SIZE]; // Stores the seqno of packets that were sent
-    int timerStarted = 0; // indicates whether a timer has already been started
-    int lastSentSeqno = -1; // This indicates the last byte in seqno array that was sent
-    // int break_loop = 0; //flag to break loop
 
-    dupAcks = 0;    //this tracks number of duplicate acks
-    int sent_packet_cnt = 0; // Tracks number of in flight packets, should not exceed congestion window
 
     //initializing seqnoArray and packetsArray
     for (int i = 0; i < WINDOW_SIZE; i++){
@@ -122,9 +121,8 @@ int main (int argc, char **argv)
     }
 
     int index; // This is the index of the array where the next packet will be stored
-    do
-    {
-        while (sent_packet_cnt < window_size){
+    while(1){
+        while (packetsInFlight < window_size){
 
             for (index=0; index< WINDOW_SIZE; index++) {
                 if (seqnoArray[index] == -1)
@@ -180,7 +178,7 @@ int main (int argc, char **argv)
             
             if(file_end== 1)
                 sentLastAck = 1;
-            sent_packet_cnt += 1;
+            packetsInFlight += 1;
         }
 
       //Wait for ACK
@@ -206,7 +204,7 @@ int main (int argc, char **argv)
                     // VLOG(INFO, "Freeing packet %d", packetsArray[i]->hdr.seqno);
                     seqnoArray[i] = -1;
                     free(packetsArray[i]);
-                    sent_packet_cnt--;
+                    packetsInFlight--;
 
                     //incrementing window size in congestion avoidance mode
                     if (!slow_start){
@@ -287,7 +285,7 @@ int main (int argc, char **argv)
         }
         
 
-    } while(1);
+    }
 
 
     int i;
