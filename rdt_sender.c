@@ -259,6 +259,9 @@ int main (int argc, char **argv)
             free(packetsArray[i]);
         }
     }
+    
+    fclose(csvFile);
+    fclose(fp);
 
     return 0;
 }
@@ -271,6 +274,7 @@ void resend_packets(int sig)
         if(sndpkt->hdr.data_size == 0 && next_seqno == send_base && endOfFile == 1)
         {
             VLOG(INFO, "Last packet is acked, exiting");
+            fclose(csvFile);
             // If the last packet is acked, then we don't need to resend
             exit(EXIT_SUCCESS);
         }
