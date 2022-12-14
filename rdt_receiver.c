@@ -11,17 +11,25 @@
 
 #include "common.h"
 #include "packet.h"
-#define RECV_BUFF_SIZE 256
 
-/*
- * You ar required to change the implementation to support
- * window size greater than one.
- * In the currenlt implemenetation window size is one, hence we have
- * onlyt one send and receive packet
- */
+#define RCV_WND_SIZE 256
+
 tcp_packet *recvpkt;
 tcp_packet *sndpkt;
 
+void endOfFileMethod(int sock, struct sockaddr_in clientaddr, int clientlen, tcp_packet *rcvpkt);
+void sendAck(int sock, struct sockaddr_in clientaddr, int clientlen, int next_seqno);
+
+/*
+ * You are required to change the implementation to support
+ * window size greater than one.
+ * In the current implementation the window size is one, hence we have
+ * only one send and receive packet
+ */
+tcp_packet *rcvpkt;
+tcp_packet *sndpkt;
+
+#define RCV_WND_SIZE 256
 
 int main(int argc, char **argv) {
     int sockfd; /* socket */
@@ -85,13 +93,15 @@ int main(int argc, char **argv) {
     VLOG(DEBUG, "epoch time, bytes received, sequence number");
 
     clientlen = sizeof(clientaddr);
-    int next_seqno=0;
-    tcp_packet* recvbuff[RECV_BUFF_SIZE];;
-    // int recvbuff_index = 0;
-    
-    int i;
-    for ( i= 0; i < RECV_BUFF_SIZE; i++){
-        recvbuff[i] = NULL;
+    int next_seqno = 0;
+
+    tcp_packet *arrayOfrcvpkts[RCV_WND_SIZE];
+
+    // Initialize the array of packets to null
+    int j = 0;
+    while (j < RCV_WND_SIZE){
+        arrayOfrcvpkts[j] = NULL;
+        j++;
     }
 
     while (1) {
@@ -99,104 +109,125 @@ int main(int argc, char **argv) {
          * recvfrom: receive a UDP datagram from a client
          */
         //VLOG(DEBUG, "waiting from server \n");
-    
+       
         if (recvfrom(sockfd, buffer, MSS_SIZE, 0,
                 (struct sockaddr *) &clientaddr, (socklen_t *)&clientlen) < 0) {
             error("ERROR in recvfrom");
         }
 
         recvpkt = (tcp_packet *) buffer;
-        // Packet that we are going to store so they don't overlap
-        tcp_packet* store_pkt = make_packet(recvpkt ->hdr.data_size);
-        memcpy(store_pkt ->data, recvpkt->data, recvpkt ->hdr.data_size);
-        store_pkt->hdr.seqno = recvpkt->hdr.seqno;
-        store_pkt->hdr.data_size = recvpkt->hdr.data_size;
-        store_pkt->hdr.ackno = recvpkt->hdr.ackno;
-        store_pkt->hdr.ctr_flags = store_pkt->hdr.ctr_flags;
 
-        assert(get_data_size(recvpkt) <= DATA_SIZE);
-        if ( recvpkt->hdr.data_size == 0) {
-            VLOG(INFO, "End Of File has been reached");
-            fclose(fp);
-            break;
-        }
+        // assert that size of packet is less than or equal to data size
+        assert(get_data_size(recvpkt)<=DATA_SIZE);
 
         gettimeofday(&tp, NULL);
         VLOG(DEBUG, "%lu, %d, %d", tp.tv_sec, recvpkt->hdr.data_size, recvpkt->hdr.seqno);
 
-        // Getting index to place in recvbuff
-        int index = (recvpkt->hdr.seqno - next_seqno)/DATA_SIZE; // Get the index to put it in
-        
-        // Check if what we received is equal to the seqno we are expecting -- in order
-        if (recvpkt->hdr.seqno == next_seqno) {  
-            
-            recvbuff[index] = store_pkt;
-            int stop_index = index;
-
-            // Write until we find a gap
-            
-            while (recvbuff[stop_index] != NULL && stop_index < RECV_BUFF_SIZE) {
-                fseek(fp, recvbuff[stop_index]->hdr.seqno, SEEK_SET);
-                fwrite(recvbuff[stop_index]->data, 1, recvbuff[stop_index]->hdr.data_size, fp);
-                next_seqno = recvbuff[stop_index]->hdr.seqno + recvbuff[stop_index]->hdr.data_size; // Setting the new next_seq_no -- it is the last in order packet + the data_size
-                free(recvbuff[stop_index]);
-                stop_index++;
-            }
-
-            
-            
-            // Shifting the buffered elements
-            int i;
-            for (i = 0; i+stop_index < RECV_BUFF_SIZE; i++) {
-                recvbuff[i] = recvbuff[i+stop_index]; // Shifting back the elements
-
-            }
-            for(i = RECV_BUFF_SIZE-stop_index; i < RECV_BUFF_SIZE; i++ ) {
-                recvbuff[i] = NULL; // Setting the rest of the elements to null
-            }
-
-            // Send ack
-            sndpkt = make_packet(0);
-            // next_seqno = recvbuff[stop_index-1]->hdr.seqno + recvbuff[stop_index-1]->hdr.data_size; 
-            sndpkt->hdr.ackno = next_seqno;
-            sndpkt->hdr.ctr_flags = ACK;
-            if (sendto(sockfd, sndpkt, TCP_HDR_SIZE, 0, 
-                    (struct sockaddr *) &clientaddr, clientlen) < 0) {
-                error("ERROR in sendto");
-            }
+        // if the packet size is zero we have reached end of file
+        if (get_data_size(recvpkt) == 0){
+            endOfFileMethod(sockfd, clientaddr, clientlen, recvpkt);
+            // close the file
+            fclose(fp);
+            break;
         }
-        
 
-        // If it is greater, add to the buffer
-        else if (recvpkt->hdr.seqno > next_seqno) {
-            // add packet to rcv buff, out of order packet
+        // get the index in the arrayrcvpkts where the packet should be stored
+        int p_ind_in_recv_buffer = (recvpkt->hdr.seqno - next_seqno)/DATA_SIZE;
 
-            recvbuff[index] = store_pkt;
+        // if the packet matches the expected sequence number
+        if (recvpkt->hdr.seqno == next_seqno){
+            // buffer the packet
+            arrayOfrcvpkts[p_ind_in_recv_buffer] = recvpkt;
 
-            // (dup ack) ack the nextseqno, to indicate we are still waiting ofr this
-            sndpkt = make_packet(0);
-            sndpkt->hdr.ackno = next_seqno;
-            sndpkt->hdr.ctr_flags = ACK;
-            if (sendto(sockfd, sndpkt, TCP_HDR_SIZE, 0, 
-                    (struct sockaddr *) &clientaddr, clientlen) < 0) {
-                error("ERROR in sendto");
+            // write to file after all the packets in the window have been received
+            int i = 0;
+            while (i < RCV_WND_SIZE){
+                if (arrayOfrcvpkts[i] != NULL){
+                    // seek to the correct position in the file
+                    fseek(fp, arrayOfrcvpkts[i]->hdr.seqno, SEEK_SET);
+
+                    // write the data to the file
+                    fwrite(arrayOfrcvpkts[i]->data, 1, arrayOfrcvpkts[i]->hdr.data_size, fp);
+
+                    // update the next_seqno
+                    next_seqno += arrayOfrcvpkts[i]->hdr.data_size;
+
+                    // free the memory
+                    arrayOfrcvpkts[i] = NULL;
+                }
+                else{
+                    break;
+                }
+                i++;
             }
+
+            // if there are any buffered packets that weren't written to file, shift them to the beginning of the array
+            if (i < RCV_WND_SIZE){
+                int k = 0;
+                while (i < RCV_WND_SIZE){
+                    arrayOfrcvpkts[k] = arrayOfrcvpkts[i];
+                    arrayOfrcvpkts[i] = NULL;
+                    i++;
+                    k++;
+                }
+            }
+
+            // send the Ack by calling the sendAck method
+            sendAck(sockfd, clientaddr, clientlen, next_seqno);
 
         }
 
-        // If it is less resend ack, it means the ack was lost
-        else {
-            // Already written, ack was not received, only need to resend ack, no need to buffer
-            sndpkt = make_packet(0);
-            sndpkt->hdr.ackno = next_seqno;
-            sndpkt->hdr.ctr_flags = ACK;
-            if (sendto(sockfd, sndpkt, TCP_HDR_SIZE, 0, 
-                    (struct sockaddr *) &clientaddr, clientlen) < 0) {
-                error("ERROR in sendto");
-            }
+        // if the packet is out of order
+        else if (recvpkt->hdr.seqno > next_seqno){
+            // buffer the packet
+            arrayOfrcvpkts[p_ind_in_recv_buffer] = recvpkt;
+
+            // print out of order message
+            VLOG(INFO, "Packet out of order");
+            // send the ACK
+            sendAck(sockfd, clientaddr, clientlen, next_seqno);
         }
-        
+
+        // if the packet is a duplicate
+        else if (recvpkt->hdr.seqno < next_seqno){
+
+            // print duplicate message
+            VLOG(INFO, "Duplicate packet received");
+            // send the ACK
+            sendAck(sockfd, clientaddr, clientlen, next_seqno);
+        }
+
     }
+        
 
     return 0;
+}
+
+
+void endOfFileMethod(int sock, struct sockaddr_in clientaddr, int clientlen, tcp_packet *rcvpkt){
+    VLOG(INFO, "End Of File has been reached");
+
+    // send the last ACK 8 times(a hack to circumvent the loss of the last ACK)
+    // this is a hack to make sure the client has received the last packet and is not waiting for more
+    // since we are breaking out of the loop
+    // for (int i = 0; i < 8;i++){ 
+    //     sndpkt = make_packet(0);
+    //     sndpkt->hdr.ackno = rcvpkt->hdr.seqno;
+    //     // printf the sequence number of the last packet
+    //     VLOG(INFO, "Last packet sequence number: %d", rcvpkt->hdr.seqno);
+    //     sndpkt->hdr.ctr_flags = ACK;
+    //     if(sendto(sock, sndpkt, TCP_HDR_SIZE, 0, (struct sockaddr *)&clientaddr, clientlen) < 0) {
+    //         error("Could not send ACK\n");
+    //     }
+    // } 	
+}
+
+void sendAck(int sockfd, struct sockaddr_in clientaddr, int clientlen, int next_seqno){
+    sndpkt = make_packet(0);
+    sndpkt->hdr.ackno = next_seqno;
+    sndpkt->hdr.ctr_flags = ACK;
+    if (sendto(sockfd, sndpkt, TCP_HDR_SIZE, 0, 
+                (struct sockaddr *) &clientaddr, clientlen) < 0) {
+        error("ERROR sending ACK");
+    }
 }

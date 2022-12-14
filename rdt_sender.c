@@ -49,6 +49,7 @@ void resend_packets(int sig);
 void start_timer();
 void stop_timer();
 void init_timer(int delay, void (*sig_handler)(int));
+int checkAbove();
 
 // Self defined functions
 
@@ -186,101 +187,18 @@ int main(int argc, char **argv)
         recvpkt = (tcp_packet *)buffer;
         assert(get_data_size(recvpkt) <= DATA_SIZE);
 
-        // if we receive an in order acknowledgement -- for step 1, this will always be the case
-        if (recvpkt->hdr.ackno > send_base)
-        {
-            // set the new send base to the ack received
-            send_base = recvpkt->hdr.ackno;
-            dupAcks = 0;
-            // free up space in the effective window
-            for (int i = 0; i < WINDOW_SIZE; i++)
-            {
-                if (seqnoArr[i] < send_base && seqnoArr[i] != -1)
-                {
-                    seqnoArr[i] = -1;   // setting it to -1 because seqno can start with 0
-                    free(packetArr[i]); // freeing packets that have been acked
-                    packetsInFlight--;
-
-                    // incrementing window size in congestion avoidance mode
-                    if (!slow_start)
-                    {
-                        if (++cwnd_float == cwnd)
-                        {
-                            cwnd = ++cwnd < WINDOW_SIZE ? cwnd : WINDOW_SIZE;
-                            cwnd_float = 0;
-                            gettimeofday(&tp, NULL);
-                            fprintf(csv_file, "%ld, %d\n", tp.tv_sec, cwnd);
-                        }
-                    }
-                    else
-                    {
-                        cwnd = ++cwnd < WINDOW_SIZE ? cwnd : WINDOW_SIZE;
-                        if (cwnd == ssthresh)
-                        {
-                            slow_start = 0;
-                        }
-
-                        // write to csv
-                        gettimeofday(&tp, NULL);
-                        fprintf(csv_file, "%ld, %d\n", tp.tv_sec, cwnd);
-                    }
-                }
-            }
-
-            // if not all packets in our window are acked
-            if (lastSeqno > send_base)
-            {
-                for (int i = 0; i < WINDOW_SIZE; i++)
-                {
-                    if (seqnoArr[i] == send_base)
-                    {
-                        sndpkt = packetArr[i];
-                        send_base = seqnoArr[i];
-                        start_timer();
-                        break;
-                    }
-                }
-            }
-            // if not we set the timer running to 0 because we are going to refill the array
-            else
-            {
-                stop_timer();
-                timerStarted = 0;
-                if (endOfFile == 1)
-                {
-                    VLOG(INFO, "End Of File has been reached");
-                    sndpkt = make_packet(0);
-                    sendto(sockfd, sndpkt, TCP_HDR_SIZE, 0,
-                           (const struct sockaddr *)&serveraddr, serverlen);
-                    break;
-                }
-            }
-        }
-
-        else
+        if (recvpkt->hdr.ackno <= send_base)
         {
             if (++dupAcks == 3)
-            { // resend if 3 duplicate acks
-                // ssthresh = cwnd / 2 > 2 ? cwnd / 2 : 2; // setting ssthresh to half of window size and starting slow start over again
-                // cwnd = 1;                               // resetting cwnd to 1 to restart slow start
-                // cwnd_float = 0;
-                // slow_start = 1; // setting flag to start slow start again
-
-                // if (sendto(sockfd, sndpkt, TCP_HDR_SIZE + get_data_size(sndpkt), 0,
-                //            (const struct sockaddr *)&serveraddr, serverlen) < 0)
-                // {
-                //     error("sendto");
-                // }
-
-                // start_timer();
-                // dupAcks = 0; // set dupAcks to 0 after resending lost packet
-
-                // // Write to csv
-                // gettimeofday(&tp, NULL);
-                // fprintf(csv_file, "%ld, %d\n", tp.tv_sec, cwnd);
+            {
                 resend_packets(SIGALRM);
                 start_timer();
             }
+            continue;
+        }
+        if (checkAbove() == -1)
+        {
+            break;
         }
     }
 
@@ -292,7 +210,8 @@ int main(int argc, char **argv)
             free(packetArr[i]);
         }
     }
-
+    fclose(fp);
+    fclose(csv_file);
     return 0;
 }
 
@@ -346,4 +265,75 @@ void init_timer(int delay, void (*sig_handler)(int))
 
     sigemptyset(&sigmask);
     sigaddset(&sigmask, SIGALRM);
+}
+
+int checkAbove()
+{
+    // set the new send base to the ack received
+    send_base = recvpkt->hdr.ackno;
+    dupAcks = 0;
+    // free up space in the effective window
+    for (int i = 0; i < WINDOW_SIZE; i++)
+    {
+        if (seqnoArr[i] < send_base && seqnoArr[i] != -1)
+        {
+            seqnoArr[i] = -1;   // setting it to -1 because seqno can start with 0
+            free(packetArr[i]); // freeing packets that have been acked
+            packetsInFlight--;
+
+            // incrementing window size in congestion avoidance mode
+            if (slow_start)
+            {
+                cwnd = ++cwnd < WINDOW_SIZE ? cwnd : WINDOW_SIZE;
+                if (cwnd == ssthresh)
+                {
+                    slow_start = 0;
+                }
+
+                // write to csv
+                gettimeofday(&tp, NULL);
+                fprintf(csv_file, "%ld, %d\n", tp.tv_sec, cwnd);
+            }
+            else
+            {
+                if (++cwnd_float == cwnd)
+                {
+                    cwnd = ++cwnd < WINDOW_SIZE ? cwnd : WINDOW_SIZE;
+                    cwnd_float = 0;
+                    gettimeofday(&tp, NULL);
+                    fprintf(csv_file, "%ld, %d\n", tp.tv_sec, cwnd);
+                }
+            }
+        }
+    }
+
+    // if not all packets in our window are acked
+    if (lastSeqno <= send_base)
+    {
+        stop_timer();
+        timerStarted = 0;
+        if (endOfFile == 1)
+        {
+            VLOG(INFO, "End Of File has been reached");
+            sndpkt = make_packet(0);
+            sendto(sockfd, sndpkt, TCP_HDR_SIZE, 0,
+                   (const struct sockaddr *)&serveraddr, serverlen);
+            return -1;
+        }
+    }
+    // if not we set the timer running to 0 because we are going to refill the array
+    else
+    {
+        for (int i = 0; i < WINDOW_SIZE; i++)
+        {
+            if (seqnoArr[i] == send_base)
+            {
+                sndpkt = packetArr[i];
+                send_base = seqnoArr[i];
+                start_timer();
+                break;
+            }
+        }
+    }
+    return 1;
 }
