@@ -12,7 +12,7 @@
 #include "common.h"
 #include "packet.h"
 
-#define RCV_WND_SIZE 256
+#define RCV_WND_SIZE 128
 
 tcp_packet *recvpkt;
 tcp_packet *sndpkt;
@@ -28,8 +28,6 @@ void sendAck(int sock, struct sockaddr_in clientaddr, int clientlen, int next_se
  */
 tcp_packet *rcvpkt;
 tcp_packet *sndpkt;
-
-#define RCV_WND_SIZE 256
 
 int main(int argc, char **argv) {
     int sockfd; /* socket */
@@ -207,19 +205,18 @@ int main(int argc, char **argv) {
 void endOfFileMethod(int sock, struct sockaddr_in clientaddr, int clientlen, tcp_packet *rcvpkt){
     VLOG(INFO, "End Of File has been reached");
 
-    // send the last ACK 8 times(a hack to circumvent the loss of the last ACK)
+    // send the last ACK 100 times(a hack to circumvent the loss of the last ACK)
     // this is a hack to make sure the client has received the last packet and is not waiting for more
     // since we are breaking out of the loop
-    // for (int i = 0; i < 8;i++){ 
-    //     sndpkt = make_packet(0);
-    //     sndpkt->hdr.ackno = rcvpkt->hdr.seqno;
-    //     // printf the sequence number of the last packet
-    //     VLOG(INFO, "Last packet sequence number: %d", rcvpkt->hdr.seqno);
-    //     sndpkt->hdr.ctr_flags = ACK;
-    //     if(sendto(sock, sndpkt, TCP_HDR_SIZE, 0, (struct sockaddr *)&clientaddr, clientlen) < 0) {
-    //         error("Could not send ACK\n");
-    //     }
-    // } 	
+    for (int i = 0; i < 100;i++){ 
+        sndpkt = make_packet(0);
+        sndpkt->hdr.ackno = rcvpkt->hdr.seqno;
+        // printf the sequence number of the last packet
+        sndpkt->hdr.ctr_flags = ACK;
+        if(sendto(sock, sndpkt, TCP_HDR_SIZE, 0, (struct sockaddr *)&clientaddr, clientlen) < 0) {
+            error("Could not send ACK\n");
+        }
+    } 	
 }
 
 void sendAck(int sockfd, struct sockaddr_in clientaddr, int clientlen, int next_seqno){

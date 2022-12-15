@@ -27,25 +27,25 @@ ax = plt.gca()
 
 
 # plotting the trace file
-f1 = open (args.trace,"r")
-BW = []
-nextTime = 1000
-cnt = 0
-for line in f1:
-    if int(line.strip()) > nextTime:
-        BW.append(cnt*1492*8)
-        cnt = 0
-        nextTime+=1000
-    else:
-        cnt+=1
-f1.close()
+# f1 = open (args.trace,"r")
+# BW = []
+# nextTime = 1000
+# cnt = 0
+# for line in f1:
+#     if int(line.strip()) > nextTime:
+#         BW.append(cnt*1492*8)
+#         cnt = 0
+#         nextTime+=1000
+#     else:
+#         cnt+=1
+# f1.close()
 
-ax.fill_between(range(len(BW)), 0, list(map(scale,BW)),color='#D3D3D3')
+# ax.fill_between(range(len(BW)), 0, list(map(scale,BW)),color='#D3D3D3')
+
 
 # plotting throughput
 throughputDL = []
 timeDL = []
-
 traceDL = open (args.dir+"/"+str(args.name), 'r')
 traceDL.readline()
 
@@ -63,8 +63,10 @@ for time in traceDL:
         bytes = int(time.strip().split(",")[1])
         startTime += 1.0
 
-print (timeDL)
-print (throughputDL)
+# close the file
+traceDL.close()
+# print (timeDL)
+# print (throughputDL)
 
 plt.plot(timeDL, throughputDL, lw=2, color='r')
 
@@ -72,4 +74,5 @@ plt.ylabel("Throughput (Mbps)")
 plt.xlabel("Time (s)")
 # plt.xlim([0,300])
 plt.grid(True, which="both")
-plt.savefig(args.dir+'/throughput.pdf',dpi=1000,bbox_inches='tight')
+plt.savefig(args.dir+'/throughput2.pdf',dpi=1000,bbox_inches='tight')
+plt.show()
