@@ -43,7 +43,10 @@ To compile the program
 
 ## How to run the program
 Run makefile
-`make`
+```
+cd startercode 
+make
+```
 
 Run the client
 `cd obj && ./rdt_receiver <port> <filename>`
