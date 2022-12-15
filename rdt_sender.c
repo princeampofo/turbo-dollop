@@ -16,7 +16,7 @@
 
 #define STDIN_FD 0
 #define RETRY 120 // milli second
-#define WINDOW_SIZE 256
+#define WINDOW_SIZE 128
 
 int next_seqno = 0;
 int send_base = 0;
@@ -75,8 +75,13 @@ int main(int argc, char **argv)
         error(argv[3]);
     }
 
+    // Read size of file
+    fseek(fp, 0L, SEEK_END);
+    int file_size = ftell(fp);
+    fseek(fp, 0L, SEEK_SET);
+
     // creating csv file to keep track of cwnd changes
-    csv_file = fopen("cwnd_receiver.csv", "w");
+    csv_file = fopen("CWND.csv", "w");
     if (csv_file == NULL)
     {
         printf("Could not open receiver file");
@@ -107,9 +112,7 @@ int main(int argc, char **argv)
 
     init_timer(RETRY, resend_packets);
 
-    // This is the actual implementatio
-
-    // dupAcks = 0;             // this tracks number of duplicate acks
+    // This is the actual implementation of the sender
 
     // initializing seqnoArr and packetArr
     for (int i = 0; i < WINDOW_SIZE; i++)
@@ -139,7 +142,7 @@ int main(int argc, char **argv)
             if (len <= 0)
             {
                 endOfFile = 1;
-                break;
+                // break;
             }
 
             // Make the packet
@@ -165,8 +168,10 @@ int main(int argc, char **argv)
             }
 
             // // VLOG information
-            // VLOG(DEBUG, "Sending packet %d to %s",
-            //         next_seqno, inet_ntoa(serveraddr.sin_addr));
+            if (endOfFile == 0)
+            {
+                VLOG(DEBUG, "Sending packet %d to %s", next_seqno, inet_ntoa(serveraddr.sin_addr));
+            }
 
             if (sendto(sockfd, tempPkt, TCP_HDR_SIZE + get_data_size(tempPkt), 0,
                        (const struct sockaddr *)&serveraddr, serverlen) < 0)
@@ -184,9 +189,18 @@ int main(int argc, char **argv)
             error("Error receiving ack");
         }
 
+        // receive the packet(ACK)
         recvpkt = (tcp_packet *)buffer;
         assert(get_data_size(recvpkt) <= DATA_SIZE);
 
+        // check if the last packet is the file size
+        if (recvpkt->hdr.ackno == file_size)
+        {
+            VLOG(INFO, "Last packet sent");
+            break;
+        }
+
+        // fast retransmit
         if (recvpkt->hdr.ackno <= send_base)
         {
             if (++dupAcks == 3)
@@ -210,6 +224,7 @@ int main(int argc, char **argv)
             free(packetArr[i]);
         }
     }
+    // close the files
     fclose(fp);
     fclose(csv_file);
     return 0;
@@ -221,7 +236,7 @@ void resend_packets(int sig)
     {
         // Resend all packets range between
         // sendBase and nextSeqNum
-        VLOG(INFO, "Timeout happened");
+        VLOG(INFO, "Timeout happened for packet %d", sndpkt->hdr.seqno);
         ssthresh = cwnd / 2 > 2 ? cwnd / 2 : 2;
         cwnd = 1;
         cwnd_float = 0;
@@ -312,14 +327,6 @@ int checkAbove()
     {
         stop_timer();
         timerStarted = 0;
-        if (endOfFile == 1)
-        {
-            VLOG(INFO, "End Of File has been reached");
-            sndpkt = make_packet(0);
-            sendto(sockfd, sndpkt, TCP_HDR_SIZE, 0,
-                   (const struct sockaddr *)&serveraddr, serverlen);
-            return -1;
-        }
     }
     // if not we set the timer running to 0 because we are going to refill the array
     else
