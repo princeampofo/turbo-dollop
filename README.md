@@ -44,7 +44,11 @@ To compile the program
 
 ## Graphs
 
-The parameters we used to spawn a shell with mahimahi
+The parameters we used to spawn a shell with mahimahi can be found below:
+
+```
+mm-delay 10 mm-loss uplink 0.2
+```
 
 ## How to run the program
 
