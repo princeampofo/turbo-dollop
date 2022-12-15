@@ -47,7 +47,7 @@ To compile the program
 The parameters we used to spawn a shell with mahimahi can be found below:
 
 ```
-mm-delay 10 mm-loss uplink 0.2 mm-link /channel_traces/cellularGold /channel_traces/cellularGold
+mm-delay 10 mm-loss uplink 0.2 mm-link ../channel_traces/cellularGold ../channel_traces/cellularGold
 ```
 
 ## How to run the program
